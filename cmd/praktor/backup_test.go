@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/klauspost/compress/zstd"
@@ -279,5 +280,39 @@ func TestArchiveRoundTrip(t *testing.T) {
 	_, err = tr.Next()
 	if err != io.EOF {
 		t.Errorf("expected EOF, got %v", err)
+	}
+}
+
+func TestPrefixEntriesLongUSTARPath(t *testing.T) {
+	// A path that fits USTAR on its own (155-byte prefix + 100-byte name) but
+	// not once the volume name is prepended — like a deep nix store path.
+	long := strings.Repeat("d", 150) + "/" + strings.Repeat("f", 95) + ".txt"
+
+	var src bytes.Buffer
+	sw := tar.NewWriter(&src)
+	if err := sw.WriteHeader(&tar.Header{Name: long, Mode: 0644, Size: 5, Format: tar.FormatUSTAR}); err != nil {
+		t.Fatalf("source header: %v", err)
+	}
+	_, _ = sw.Write([]byte("hello"))
+	_ = sw.Close()
+
+	var out bytes.Buffer
+	tw := tar.NewWriter(&out)
+	if err := prefixEntries(tar.NewReader(&src), tw, "praktor-nix-general"); err != nil {
+		t.Fatalf("prefixEntries: %v", err)
+	}
+	_ = tw.Close()
+
+	tr := tar.NewReader(&out)
+	hdr, err := tr.Next()
+	if err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	if want := "praktor-nix-general/" + long; hdr.Name != want {
+		t.Errorf("name = %q, want %q", hdr.Name, want)
+	}
+	data, _ := io.ReadAll(tr)
+	if string(data) != "hello" {
+		t.Errorf("content = %q, want %q", data, "hello")
 	}
 }

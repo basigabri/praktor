@@ -138,35 +138,40 @@ func backupVolume(ctx context.Context, docker *client.Client, tw *tar.Writer, vo
 	}
 	defer func() { _ = copyResp.Content.Close() }()
 
-	// Re-write tar entries with volume name prefix
-	srcTar := tar.NewReader(copyResp.Content)
+	return prefixEntries(tar.NewReader(copyResp.Content), tw, volName)
+}
+
+// prefixEntries copies every entry from src to tw with the volume name
+// prepended to its path.
+func prefixEntries(src *tar.Reader, tw *tar.Writer, volName string) error {
 	for {
-		hdr, err := srcTar.Next()
+		hdr, err := src.Next()
 		if err == io.EOF {
-			break
+			return nil
 		}
 		if err != nil {
 			return fmt.Errorf("read tar entry: %w", err)
 		}
 
-		// Prefix entry name with volume name
 		hdr.Name = path.Join(volName, hdr.Name)
 		if hdr.Typeflag == tar.TypeDir && !strings.HasSuffix(hdr.Name, "/") {
 			hdr.Name += "/"
 		}
+		// Docker sends USTAR headers, and the longer prefixed name may no
+		// longer fit USTAR's limits (deep nix store paths don't). Let the
+		// writer pick a format that can encode the header (PAX if needed).
+		hdr.Format = tar.FormatUnknown
 
 		if err := tw.WriteHeader(hdr); err != nil {
 			return fmt.Errorf("write tar header: %w", err)
 		}
 
 		if hdr.Size > 0 {
-			if _, err := io.Copy(tw, srcTar); err != nil {
+			if _, err := io.Copy(tw, src); err != nil {
 				return fmt.Errorf("write tar data: %w", err)
 			}
 		}
 	}
-
-	return nil
 }
 
 func runRestore(args []string) error {
