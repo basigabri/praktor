@@ -32,6 +32,39 @@ jobs:
 
       - run: CGO_ENABLED=0 go test ./internal/... ./cmd/...
 
+  # Short, time-boxed fuzzing of the parsers and handlers that face untrusted
+  # input. The seed corpora also run as plain tests in the test job.
+  fuzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - { pkg: ./internal/container, name: FuzzContainerIDFromMountinfo }
+          - { pkg: ./internal/container, name: FuzzMountinfoLine }
+          - { pkg: ./internal/container, name: FuzzDecideAttach }
+          - { pkg: ./internal/web, name: FuzzChatBody }
+          - { pkg: ./internal/web, name: FuzzChatUnauthenticated }
+          - { pkg: ./internal/router, name: FuzzRoute }
+    name: fuzz (${{ matrix.target.name }})
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: jdx/mise-action@v4
+        with:
+          experimental: true
+
+      - run: CGO_ENABLED=0 go test ${{ matrix.target.pkg }} -run '^$' -fuzz '^${{ matrix.target.name }}$' -fuzztime=30s
+
+      - name: Upload the failing input
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: fuzz-${{ matrix.target.name }}
+          path: '**/testdata/fuzz/${{ matrix.target.name }}/'
+          if-no-files-found: ignore
+
   agent-runner:
     runs-on: ubuntu-latest
     defaults:
