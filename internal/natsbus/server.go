@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/mtzanidakis/praktor/internal/config"
@@ -74,19 +75,26 @@ func (b *Bus) Port() int {
 	return b.port
 }
 
-// AgentNATSURL returns the NATS URL that agent containers should use.
-// When the gateway runs inside Docker, it uses the container hostname;
+// AgentNATSHost returns the host agent containers dial to reach NATS.
+// When the gateway runs inside Docker, it is the container hostname;
 // otherwise it falls back to localhost.
-func (b *Bus) AgentNATSURL() string {
-	host := "localhost"
+func AgentNATSHost() string { return agentNATSHost() }
+
+// The host can't change at runtime, so it is resolved once.
+var agentNATSHost = sync.OnceValue(func() string {
 	if _, err := os.Stat("/.dockerenv"); err == nil {
 		// Running inside Docker — use hostname which is resolvable
 		// from other containers on the same network.
 		if h, err := os.Hostname(); err == nil && h != "" {
-			host = h
+			return h
 		}
 	}
-	url := fmt.Sprintf("nats://%s:%d", host, b.port)
+	return "localhost"
+})
+
+// AgentNATSURL returns the NATS URL that agent containers should use.
+func (b *Bus) AgentNATSURL() string {
+	url := fmt.Sprintf("nats://%s:%d", AgentNATSHost(), b.port)
 	slog.Info("agent NATS URL resolved", "url", url)
 	return url
 }
