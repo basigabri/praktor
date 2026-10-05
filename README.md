@@ -14,6 +14,7 @@ Personal AI agent assistant. A single Go binary that receives messages from Tele
 
 - **Mission Control** — Real-time dashboard with WebSocket updates
 - **Telegram I/O** — Chat with your agents from your phone
+- **Chat API** — `POST /api/chat` sends a message to an agent and returns its reply, for Home Assistant, scripts and other HTTP clients
 - **Telegram commands** — `/start`, `/stop`, `/reset`, `/nix`, `/agents`, `/commands`
 - **Named agents** — Multiple agents with distinct roles, models, and configurations
 - **Smart routing** — `@agent_name` prefix or AI-powered classification via the default agent

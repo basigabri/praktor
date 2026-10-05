@@ -205,6 +205,7 @@ GET            /api/agents/definitions              # List agent definitions
 GET            /api/agents/definitions/{id}          # Agent details
 GET            /api/agents/definitions/{id}/messages # Message history
 GET            /api/agents                           # Active agent containers
+POST           /api/chat                             # Send a message to an agent and wait for its reply
 GET/POST       /api/tasks                            # List/create scheduled tasks (optional check_command)
 PUT/DELETE     /api/tasks/{id}                       # Update/delete task
 DELETE         /api/tasks/completed                  # Delete all completed tasks
@@ -300,6 +301,29 @@ The lead agent always runs last and receives all prior results for synthesis.
 **WebSocket events:** `swarm_started`, `swarm_agent_started`, `swarm_agent_completed`, `swarm_tier_completed`, `swarm_completed`, `swarm_failed` — published on `events.swarm.{swarmID}`.
 
 **DB columns:** `swarm_runs` table includes `name`, `synapses` (JSON), `lead_agent` (added via ALTER TABLE migrations that ignore duplicate column errors).
+
+## Chat API
+
+`POST /api/chat` with `{"message": "...", "agent": "optional", "timeout": optional seconds}` sends a message to an agent and returns `{"agent", "reply"}` once it answers. It's for HTTP clients (Home Assistant, scripts) that need a request/response instead of Telegram.
+
+- **Routing:** without `agent`, the message is routed like a Telegram message (`@agent_name` prefix → smart routing → default agent). A bare `@agent` is sent as typed. `@swarm` returns 400; use `POST /api/swarms`.
+- **Auth:** it's behind the same auth as the rest of `/api`, and it **requires `web.auth`** (403 without it). The API sends `Access-Control-Allow-Origin: *`, so without a password any web page could run agents and read their replies.
+- **Timeout:** `timeout` (1–600s, default 180s) covers routing and the reply; 504 when it runs out.
+- **Status codes:** 400 for a bad body, 404 for an unknown agent, 413 for a body over 1 MiB, 503 when routing fails.
+
+Implementation (`internal/web/api_chat.go`):
+
+- The message carries meta `channel=api` and a `request_id`. A single orchestrator output listener (`chatWaiters.deliver`) matches replies to waiting requests by `request_id`.
+- The Telegram output listener skips `channel=api` replies (`isTelegramReply`), because its last-chat fallback would otherwise post them to Telegram too.
+- When the orchestrator can't find a reply's own message and falls back to the agent's last meta, it never uses API meta (`fallbackReplyMeta`): a guess must not answer someone else's request.
+- Routing and the agent run use the server's lifetime context, not the request's, so a client that disconnects doesn't cancel a container start, the run, or messages queued behind it. If the client is gone after routing, or routing used up the timeout (504), the message isn't sent, so a retry can't run the agent twice.
+
+Known limitations (the orchestrator has no per-run completion signal):
+
+- A run that ends without text (a file-only reply, `/stop`, a container crash) isn't reported to listeners and ends in a 504.
+- Abnormal terminations come back as a 200 whose reply carries the same `⚠️ Agent stopped` notice Telegram shows.
+- Each agent keeps one session, so API and Telegram messages share the conversation.
+- Like scheduled tasks, an API message updates the agent's last-message meta, which `file_send` uses to find a Telegram chat.
 
 ## SQLite Schema
 

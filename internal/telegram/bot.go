@@ -107,6 +107,10 @@ func NewBot(cfg config.TelegramConfig, orch *agent.Orchestrator, rtr *router.Rou
 
 	// Register output listener to send responses back to Telegram
 	orch.OnOutput(func(agentID, content string, meta map[string]string) {
+		if !isTelegramReply(meta) {
+			return
+		}
+
 		// Try to get chat_id from meta
 		chatIDStr := ""
 		if meta != nil {
@@ -204,6 +208,13 @@ func NewBot(cfg config.TelegramConfig, orch *agent.Orchestrator, rtr *router.Rou
 	}
 
 	return b, nil
+}
+
+// isTelegramReply reports whether an agent reply belongs in Telegram. Replies
+// to messages from the HTTP chat API go back in the HTTP response; without
+// this check the last-chat fallback above would also post them to Telegram.
+func isTelegramReply(meta map[string]string) bool {
+	return meta[agent.MetaChannel] != agent.ChannelAPI
 }
 
 func (b *Bot) Start(ctx context.Context) error {

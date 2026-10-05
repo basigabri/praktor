@@ -49,10 +49,15 @@ type Server struct {
 
 	sessionMu sync.Mutex
 	sessions  map[string]time.Time // token → expiry
+
+	baseCtx     context.Context // server lifetime; set by Start
+	chatBackend chatBackend     // nil when no orchestrator is wired (tests)
+	chatWaiters *chatWaiters
+	chatTimeout time.Duration // 0 = defaultChatTimeout
 }
 
 func NewServer(s *store.Store, bus *natsbus.Bus, orch *agent.Orchestrator, reg *registry.Registry, rtr *router.Router, swarmCoord *swarm.Coordinator, cfg config.WebConfig, v *vault.Vault, version string) *Server {
-	return &Server{
+	srv := &Server{
 		store:      s,
 		bus:        bus,
 		orch:       orch,
@@ -65,10 +70,18 @@ func NewServer(s *store.Store, bus *natsbus.Bus, orch *agent.Orchestrator, reg *
 		version:    version,
 		startedAt:  time.Now(),
 		sessions:   make(map[string]time.Time),
+
+		chatWaiters: newChatWaiters(),
 	}
+	if orch != nil && reg != nil && rtr != nil {
+		srv.chatBackend = serverChat{srv}
+		orch.OnOutput(srv.chatWaiters.deliver)
+	}
+	return srv
 }
 
 func (s *Server) Start(ctx context.Context) error {
+	s.baseCtx = ctx
 	go s.hub.Run(ctx)
 
 	// Subscribe to NATS events and broadcast to WebSocket
