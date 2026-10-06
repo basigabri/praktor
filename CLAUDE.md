@@ -234,6 +234,15 @@ All containers use Docker named volumes (no host path dependencies):
 
 The gateway uses `praktor-data` for SQLite/NATS and `praktor-global` for global instructions. Both gateway and agents run as non-root user `praktor` (uid 10321).
 
+## Agent Network
+
+Agent containers join the `praktor-net` bridge network and dial NATS at the gateway's hostname (`natsbus.AgentNATSHost`). That hostname only resolves on a network the gateway shares with them. Compose attaches the gateway to `praktor-net`, but other deployments (a Home Assistant app, a plain `docker run`) start it elsewhere. So at startup, a background goroutine (`Manager.AttachToAgentNetwork` in `internal/container/network.go`) makes sure the network exists. If the gateway runs in Docker and isn't on it, the goroutine connects the gateway's own container with its hostname as a DNS alias.
+
+- **Finding itself:** the container ID in `/proc/self/mountinfo`, taken only from the mounts Docker makes for `/etc/hostname`, `/etc/hosts` and `/etc/resolv.conf`. Inspecting by hostname is a fallback, accepted only when the container's configured hostname matches, because Docker also resolves names and ID prefixes of other containers.
+- **Connecting:** with `GwPriority: -1`, so on Docker 28+ `praktor-net` doesn't take over the gateway's default route. Older daemons ignore the field and break ties by network name. Joining a user-defined network also switches a gateway that started on the default `bridge` network to Docker's embedded DNS resolver.
+- **No-op cases:** under Compose (already attached) and outside Docker. In `host`, `container:` and `none` network modes, joining is impossible, so it logs a warning. If the gateway is on `praktor-net` but its hostname isn't one of its DNS names there, it also warns and doesn't change anything. That setup was already broken, and reconnecting would briefly cut the gateway off a network someone else configured.
+- **Errors:** never fatal. The first failure is a warning. After that it retries in the background with backoff (5s doubling to 10 min) and logs at debug level. Each attempt has a 10s timeout and holds the manager lock only while ensuring the network exists. The decision is the pure `decideAttach`, covered by table tests.
+
 ## Container Security Hardening
 
 Agent containers are hardened via `defaults.security` (reloadable; per-agent override via `security:` on an agent definition, `nil` inherits defaults). Built-in profile is "Balanced". Applied in `internal/container/manager.go` (`applySecurity`) onto the Docker `HostConfig`:

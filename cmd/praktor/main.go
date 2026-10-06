@@ -106,6 +106,8 @@ func runGateway() error {
 	if err != nil {
 		return fmt.Errorf("init container manager: %w", err)
 	}
+	// Make sure agents can reach NATS when not deployed via Compose
+	go ctrMgr.AttachToAgentNetwork(ctx)
 
 	// Vault
 	if cfg.Vault.Passphrase == "" {
