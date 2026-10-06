@@ -1,16 +1,32 @@
 # Bundle agent runner with esbuild (no node_modules needed at runtime)
-FROM node:24-trixie AS agent-builder
+FROM node:24-trixie@sha256:c62c1553d064ddfb62d9f7de1a4b16243101bddd2c58b6069f3364fc6c233eec AS agent-builder
 WORKDIR /app
-COPY agent-runner/package.json agent-runner/package-lock.json* ./
-RUN npm ci 2>/dev/null || npm install
+COPY agent-runner/package.json agent-runner/package-lock.json ./
+RUN npm ci
 COPY agent-runner/src/ src/
 COPY agent-runner/tsconfig.json .
 COPY agent-runner/esbuild.mjs .
 RUN node esbuild.mjs
 
-FROM ghcr.io/mtzanidakis/praktor-agent-base:latest
+# Upstream agent base v0.9.12, pinned by digest (a tag can be moved to a
+# different image; a digest can't).
+FROM ghcr.io/mtzanidakis/praktor-agent-base@sha256:b1f9c3bb7d11dbe68ccc26ad484d66fc55c738cf56b51fa30a35c44677188461
 COPY --from=agent-builder /app/out/ /app/
-RUN /usr/local/bin/getcc -get-version 2.1.289 -save /usr/local/bin/claude && chmod 555 /usr/local/bin/claude
+# Claude Code, checked against the SHA-256 in its release manifest. The
+# manifest's GPG signature (key 31DD DE24 DDFA B679 F42D 7BD2 BAA9 29FF 1A7E
+# CACE, https://downloads.claude.ai/keys/claude-code.asc) was verified when
+# these checksums were pinned; update all three together.
+ARG CLAUDE_CODE_VERSION=2.1.289
+ARG CLAUDE_CODE_SHA256_AMD64=a186b99e4a9c88366cd49df2f7dad56c61fc306ef0140b19ee64b7c42a8d1348
+ARG CLAUDE_CODE_SHA256_ARM64=d100d5e41dcbee220c80d3a3099292e4b5a508b57cafd181856efedf29f84f28
+RUN /usr/local/bin/getcc -get-version "${CLAUDE_CODE_VERSION}" -save /usr/local/bin/claude && \
+    case "$(dpkg --print-architecture)" in \
+      amd64) sum="${CLAUDE_CODE_SHA256_AMD64}" ;; \
+      arm64) sum="${CLAUDE_CODE_SHA256_ARM64}" ;; \
+      *) echo "unsupported architecture" >&2; exit 1 ;; \
+    esac && \
+    echo "${sum}  /usr/local/bin/claude" | sha256sum -c - && \
+    chmod 555 /usr/local/bin/claude
 USER praktor
 WORKDIR /workspace/agent
 ENTRYPOINT ["tini", "--", "node", "/app/index.mjs"]

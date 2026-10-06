@@ -1,11 +1,11 @@
 # Stage 1: Build the React UI
-FROM node:24-alpine AS ui-builder
+FROM node:24-alpine@sha256:ebfe2f90462722a7a4de65e91990e97fe0d401c70e0e762c5b53302f905ec1c1 AS ui-builder
 WORKDIR /ui
 COPY ui/ .
-RUN npm install && npm run build
+RUN npm ci && npm run build
 
 # Stage 2: Build the Go binary
-FROM golang:1.27.1-alpine AS go-builder
+FROM golang:1.27.1-alpine@sha256:8a5910f31396cd4d89662f56c68b3ae31d374308270a1c3bd96672ee5ed43414 AS go-builder
 RUN apk add --no-cache busybox-static ca-certificates tzdata && \
    update-ca-certificates
 RUN adduser \
