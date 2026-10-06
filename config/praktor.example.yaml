@@ -64,6 +64,8 @@ web:
   enabled: true
   port: 8080
   auth: "${PRAKTOR_WEB_PASSWORD}"    # Basic auth for dashboard
+  # chat_token: set PRAKTOR_CHAT_TOKEN  # Bearer token for POST /api/chat only (e.g. Home Assistant)
+  # chat_agents: [general]            # Agents the chat token may reach; first is the default
 
 vault:
   passphrase: "${PRAKTOR_VAULT_PASSPHRASE}"

@@ -12,12 +12,14 @@ const (
 )
 
 // fallbackReplyMeta is the meta used for a reply whose own message can't be
-// found: the agent's last message meta, which is only a guess. A guess must
-// never answer a specific chat API request, so API meta is dropped and the
-// reply goes to the listeners' own fallbacks (Telegram's last chat).
+// found: the agent's last message meta, which is only a guess. When that last
+// message came from the chat API, the orphan is most likely that API run's
+// reply (a duplicate, or a run the orchestrator no longer tracks). It is
+// tagged as API without a request_id, so it answers no request and Telegram
+// skips it instead of posting it to the chat that last talked to the agent.
 func fallbackReplyMeta(last map[string]string) map[string]string {
 	if last[MetaChannel] == ChannelAPI {
-		return nil
+		return map[string]string{MetaChannel: ChannelAPI}
 	}
 	return last
 }

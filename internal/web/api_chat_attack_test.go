@@ -9,7 +9,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"os"
 	"regexp"
 	"runtime"
 	"strconv"
@@ -67,8 +66,13 @@ func startServerWith(t testing.TB, auth string, mk func(*Server) chatBackend) *l
 }
 
 func tryStartServer(t testing.TB, auth string, mk func(*Server) chatBackend) (*liveServer, error) {
-	port := freePort(t)
-	srv := NewServer(nil, nil, nil, nil, nil, nil, config.WebConfig{Enabled: true, Port: port, Auth: auth}, nil, "test")
+	return tryStartServerCfg(t, config.WebConfig{Auth: auth}, mk)
+}
+
+func tryStartServerCfg(t testing.TB, cfg config.WebConfig, mk func(*Server) chatBackend) (*liveServer, error) {
+	cfg.Enabled = true
+	cfg.Port = freePort(t)
+	srv := NewServer(nil, nil, nil, nil, nil, nil, cfg, nil, "test")
 	srv.chatTimeout = 2 * time.Second
 	f := &fakeChat{srv: srv}
 	srv.chatBackend = f
@@ -80,7 +84,7 @@ func tryStartServer(t testing.TB, auth string, mk func(*Server) chatBackend) (*l
 	done := make(chan error, 1)
 	go func() { done <- srv.Start(ctx) }()
 
-	addr := "127.0.0.1:" + strconv.Itoa(port)
+	addr := "127.0.0.1:" + strconv.Itoa(cfg.Port)
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		select {
@@ -483,13 +487,9 @@ func TestChatMetaCannotBeSpoofed(t *testing.T) {
 	}
 }
 
-// A timeout above int64/1e9 overflows time.Duration before the range check.
-// 2^55+30 seconds wraps to exactly 30s and is accepted. The effective timeout
-// is still within 1–600s, so the impact is only that out-of-range input is
-// accepted instead of rejected with 400.
+// A timeout above int64/1e9 would overflow time.Duration if converted before
+// the range check: 2^55+30 seconds wraps to exactly 30s. It must be rejected.
 func TestChatTimeoutOverflowIsRejected(t *testing.T) {
-	knownBug(t, "timeout 36028797018963998 (2^55+30) overflows time.Duration and is accepted as 30s; "+
-		"check req.Timeout against 1..600 before multiplying")
 	ls := startServer(t, attackPassword)
 	auth := []string{"Authorization: " + basic("a", attackPassword)}
 	for _, v := range []string{"36028797018963998", "-36028797018963938"} {
@@ -644,13 +644,10 @@ func TestChatSlowBody(t *testing.T) {
 	}
 }
 
-// The HTTP server has no read timeouts (http.Server{Addr, Handler} in Start),
-// so anyone who can reach the port can hold connections open forever without
-// credentials (Slowloris). On a Raspberry Pi that runs out of file
-// descriptors or memory.
+// Without read timeouts, anyone who can reach the port could hold connections
+// open forever without credentials (Slowloris), which on a Raspberry Pi runs
+// out of file descriptors or memory. ReadHeaderTimeout closes them.
 func TestServerClosesSlowHeaders(t *testing.T) {
-	knownBug(t, "Server.Start sets no ReadHeaderTimeout/ReadTimeout/IdleTimeout: unauthenticated clients can hold "+
-		"connections open forever (Slowloris). Set at least ReadHeaderTimeout (e.g. 10s) and IdleTimeout.")
 	ls := startServer(t, attackPassword)
 	conn, err := net.Dial("tcp", ls.addr)
 	if err != nil {
@@ -658,11 +655,11 @@ func TestServerClosesSlowHeaders(t *testing.T) {
 	}
 	defer func() { _ = conn.Close() }()
 	_, _ = io.WriteString(conn, "POST /api/chat HTTP/1.1\r\nHost: x\r\n") // never finishes
-	_ = conn.SetReadDeadline(time.Now().Add(65 * time.Second))
+	_ = conn.SetReadDeadline(time.Now().Add(20 * time.Second))
 	buf := make([]byte, 1)
 	if _, err := conn.Read(buf); err != nil {
 		if ne, ok := err.(net.Error); ok && ne.Timeout() {
-			t.Fatal("server kept a half-sent request open for over a minute")
+			t.Fatal("server kept a half-sent request open for 20s")
 		}
 	}
 }
@@ -737,15 +734,6 @@ func TestChatRepliesRaceTimeouts(t *testing.T) {
 	wg.Wait()
 	if n := len(srv.chatWaiters.pending); n != 0 {
 		t.Errorf("%d waiters left", n)
-	}
-}
-
-// knownBug skips a test that demonstrates an open bug, so CI stays green
-// until it is fixed. Set PRAKTOR_RUN_KNOWN_BUGS=1 to run it and see it fail.
-func knownBug(t testing.TB, msg string) {
-	t.Helper()
-	if os.Getenv("PRAKTOR_RUN_KNOWN_BUGS") == "" {
-		t.Skip("BUG: " + msg)
 	}
 }
 

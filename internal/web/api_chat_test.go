@@ -76,8 +76,18 @@ func newChatServer(t *testing.T) (*Server, *fakeChat) {
 
 func postChat(t *testing.T, srv *Server, body string) (*httptest.ResponseRecorder, chatResponse) {
 	t.Helper()
+	return postChatWith(t, srv, body, false)
+}
+
+// postChatWith calls the handler directly; viaToken marks the request as
+// authenticated with the chat token, as the middleware does.
+func postChatWith(t *testing.T, srv *Server, body string, viaToken bool) (*httptest.ResponseRecorder, chatResponse) {
+	t.Helper()
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/chat", strings.NewReader(body))
+	if viaToken {
+		req = req.WithContext(withChatToken(req.Context()))
+	}
 	srv.chat(rec, req)
 	var resp chatResponse
 	if rec.Code == http.StatusOK {
@@ -310,4 +320,10 @@ func TestChatRoutingUsesUpTimeoutDoesNotRunAgent(t *testing.T) {
 	if len(f.meta) != 0 {
 		t.Error("message was sent to the agent after the deadline passed")
 	}
+}
+
+func (f *fakeChat) messages() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.meta)
 }

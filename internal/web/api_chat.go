@@ -2,9 +2,11 @@ package web
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -100,19 +102,29 @@ type chatResponse struct {
 // chat sends a message to an agent and waits for its reply, for HTTP clients
 // (Home Assistant, scripts) that need a request/response instead of Telegram.
 //
-// Without "agent", the message is routed like a Telegram message: an
-// @agent_name prefix, then smart routing, then the default agent. Agents keep
-// one session each, so the conversation is shared with Telegram.
+// With the admin password, a message without "agent" is routed like a
+// Telegram message: an @agent_name prefix, then smart routing, then the
+// default agent. With the chat token (web.chat_token), it never goes through
+// smart routing, which would send the text to the default agent's model: the
+// agent is "agent", else an @agent_name prefix, else the first of
+// web.chat_agents, and must be one of web.chat_agents when that is set.
+// Agents keep one session each, so the conversation is shared with Telegram.
 //
-// It requires web.auth: the API sends Access-Control-Allow-Origin: *, so
-// without a password any web page could make agents run and read the reply.
+// It requires web.auth or web.chat_token: the API sends
+// Access-Control-Allow-Origin: *, so without credentials any web page could
+// make agents run and read the reply.
 func (s *Server) chat(w http.ResponseWriter, r *http.Request) {
 	if s.chatBackend == nil {
 		jsonError(w, "chat is not available", http.StatusServiceUnavailable)
 		return
 	}
-	if s.cfg.Auth == "" {
-		jsonError(w, "chat requires web.auth to be set", http.StatusForbidden)
+	viaToken := hasChatToken(r.Context())
+	if !viaToken && s.cfg.Auth == "" {
+		if s.cfg.ChatToken != "" {
+			jsonError(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		jsonError(w, "chat requires web.auth or web.chat_token to be set", http.StatusForbidden)
 		return
 	}
 
@@ -129,16 +141,18 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "message is required", http.StatusBadRequest)
 		return
 	}
+	// Checked as an integer before converting, so huge values can't overflow
+	// time.Duration into a small, valid-looking timeout.
+	if req.Timeout != 0 && (req.Timeout < 1 || req.Timeout > int(maxChatTimeout/time.Second)) {
+		jsonError(w, "timeout must be between 1 and 600 seconds", http.StatusBadRequest)
+		return
+	}
 	timeout := s.chatTimeout
 	if timeout <= 0 {
 		timeout = defaultChatTimeout
 	}
 	if req.Timeout != 0 {
 		timeout = time.Duration(req.Timeout) * time.Second
-		if timeout < time.Second || timeout > maxChatTimeout {
-			jsonError(w, "timeout must be between 1 and 600 seconds", http.StatusBadRequest)
-			return
-		}
 	}
 	deadline := time.Now().Add(timeout) // covers routing and the reply
 
@@ -151,7 +165,15 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	agentID, text := req.Agent, req.Message
-	if agentID != "" {
+	if viaToken {
+		var status int
+		var msg string
+		agentID, text, status, msg = s.tokenAgent(req)
+		if status != 0 {
+			jsonError(w, msg, status)
+			return
+		}
+	} else if agentID != "" {
 		if !s.chatBackend.HasAgent(agentID) {
 			jsonError(w, "unknown agent: "+agentID, http.StatusNotFound)
 			return
@@ -211,4 +233,51 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request) {
 		}
 		// Otherwise the client went away; there is no one to answer.
 	}
+}
+
+type chatTokenKey struct{}
+
+func withChatToken(ctx context.Context) context.Context {
+	return context.WithValue(ctx, chatTokenKey{}, true)
+}
+
+func hasChatToken(ctx context.Context) bool {
+	ok, _ := ctx.Value(chatTokenKey{}).(bool)
+	return ok
+}
+
+// validChatToken reports whether the request carries web.chat_token as a
+// bearer token. The comparison is constant-time.
+func (s *Server) validChatToken(r *http.Request) bool {
+	if s.cfg.ChatToken == "" {
+		return false
+	}
+	token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+	return ok && subtle.ConstantTimeCompare([]byte(token), []byte(s.cfg.ChatToken)) == 1
+}
+
+// tokenAgent picks the agent for a chat-token request without smart routing.
+// It returns a non-zero HTTP status and message when the request is refused.
+func (s *Server) tokenAgent(req chatRequest) (agentID, text string, status int, msg string) {
+	allowed := s.cfg.ChatAgents
+	agentID, text = req.Agent, req.Message
+	if agentID == "" {
+		if name, rest, _ := strings.Cut(req.Message, " "); strings.HasPrefix(name, "@") && s.chatBackend.HasAgent(name[1:]) {
+			agentID = name[1:]
+			if strings.TrimSpace(rest) != "" {
+				text = rest
+			}
+		} else if len(allowed) > 0 {
+			agentID = allowed[0]
+		} else {
+			return "", "", http.StatusBadRequest, "agent is required (or set web.chat_agents)"
+		}
+	}
+	if len(allowed) > 0 && !slices.Contains(allowed, agentID) {
+		return "", "", http.StatusForbidden, "agent not allowed for the chat token: " + agentID
+	}
+	if !s.chatBackend.HasAgent(agentID) {
+		return "", "", http.StatusNotFound, "unknown agent: " + agentID
+	}
+	return agentID, text, 0, ""
 }

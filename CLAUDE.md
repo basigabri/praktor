@@ -306,16 +306,17 @@ The lead agent always runs last and receives all prior results for synthesis.
 
 `POST /api/chat` with `{"message": "...", "agent": "optional", "timeout": optional seconds}` sends a message to an agent and returns `{"agent", "reply"}` once it answers. It's for HTTP clients (Home Assistant, scripts) that need a request/response instead of Telegram.
 
-- **Routing:** without `agent`, the message is routed like a Telegram message (`@agent_name` prefix → smart routing → default agent). A bare `@agent` is sent as typed. `@swarm` returns 400; use `POST /api/swarms`.
-- **Auth:** it's behind the same auth as the rest of `/api`, and it **requires `web.auth`** (403 without it). The API sends `Access-Control-Allow-Origin: *`, so without a password any web page could run agents and read their replies.
-- **Timeout:** `timeout` (1–600s, default 180s) covers routing and the reply; 504 when it runs out.
+- **Routing (admin password):** without `agent`, the message is routed like a Telegram message (`@agent_name` prefix → smart routing → default agent). A bare `@agent` is sent as typed. `@swarm` returns 400; use `POST /api/swarms`.
+- **Auth:** the admin password (session or Basic auth, like the rest of `/api`), or the **chat token** `web.chat_token` (`PRAKTOR_CHAT_TOKEN`) as `Authorization: Bearer <token>`. The token grants `POST /api/chat` and nothing else, so a client such as Home Assistant never holds the admin password. It **requires `web.auth` or `web.chat_token`** (403 without either): the API sends `Access-Control-Allow-Origin: *`, so without credentials any web page could run agents and read their replies. Both credentials are compared in constant time.
+- **Chat-token requests never use smart routing**, which would send the text to the default agent's model. The agent is `agent`, else an `@agent_name` prefix, else the first of `web.chat_agents`, and must be one of `web.chat_agents` when that is set (403 otherwise; 400 if no agent can be chosen).
+- **Timeout:** `timeout` (1–600s, default 180s) covers routing and the reply; 504 when it runs out. The web server also sets `ReadHeaderTimeout` (10s) and `IdleTimeout` (120s), so clients can't hold connections open without sending a request.
 - **Status codes:** 400 for a bad body, 404 for an unknown agent, 413 for a body over 1 MiB, 503 when routing fails.
 
 Implementation (`internal/web/api_chat.go`):
 
 - The message carries meta `channel=api` and a `request_id`. A single orchestrator output listener (`chatWaiters.deliver`) matches replies to waiting requests by `request_id`.
 - The Telegram output listener skips `channel=api` replies (`isTelegramReply`), because its last-chat fallback would otherwise post them to Telegram too.
-- When the orchestrator can't find a reply's own message and falls back to the agent's last meta, it never uses API meta (`fallbackReplyMeta`): a guess must not answer someone else's request.
+- When the orchestrator can't find a reply's own message and falls back to the agent's last meta (`fallbackReplyMeta`), API meta is reduced to `channel=api` without a `request_id`: the orphan answers no request and Telegram skips it.
 - Routing and the agent run use the server's lifetime context, not the request's, so a client that disconnects doesn't cancel a container start, the run, or messages queued behind it. If the client is gone after routing, or routing used up the timeout (504), the message isn't sent, so a retry can't run the agent twice.
 
 Known limitations (the orchestrator has no per-run completion signal):

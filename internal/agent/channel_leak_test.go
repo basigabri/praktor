@@ -158,13 +158,9 @@ func TestAPIRepliesNeverReachTelegram(t *testing.T) {
 
 // An orphan result (unknown or missing msg_id: a duplicate, or a result from
 // a run the orchestrator no longer tracks) while the agent's last message came
-// from the API is most likely that API run's reply. fallbackReplyMeta drops the
-// API meta and returns nil, and the Telegram listener then posts it to the
-// chat that last talked to the agent.
+// from the API is most likely that API run's reply. It must not be posted to
+// the chat that last talked to the agent.
 func TestOrphanReplyAfterAPIMessageStaysOffTelegram(t *testing.T) {
-	knownBug(t, "an orphan result after an API message reaches Telegram: fallbackReplyMeta returns nil meta, "+
-		"and the Telegram listener's last-chat fallback posts it. Returning meta that still says channel=api "+
-		"(without request_id) would keep it off Telegram and away from every waiter.")
 	cases := []struct {
 		name  string
 		msgID string
