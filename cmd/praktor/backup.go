@@ -21,7 +21,7 @@ import (
 
 const (
 	volumePrefix       = "praktor-"
-	defaultHelperImage = "alpine:3"
+	defaultHelperImage = "alpine:3@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6"
 )
 
 func runBackup(args []string) error {

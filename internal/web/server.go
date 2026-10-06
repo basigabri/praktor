@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	"embed"
 	"encoding/hex"
 	"encoding/json"
@@ -49,10 +50,15 @@ type Server struct {
 
 	sessionMu sync.Mutex
 	sessions  map[string]time.Time // token → expiry
+
+	baseCtx     context.Context // server lifetime; set by Start
+	chatBackend chatBackend     // nil when no orchestrator is wired (tests)
+	chatWaiters *chatWaiters
+	chatTimeout time.Duration // 0 = defaultChatTimeout
 }
 
 func NewServer(s *store.Store, bus *natsbus.Bus, orch *agent.Orchestrator, reg *registry.Registry, rtr *router.Router, swarmCoord *swarm.Coordinator, cfg config.WebConfig, v *vault.Vault, version string) *Server {
-	return &Server{
+	srv := &Server{
 		store:      s,
 		bus:        bus,
 		orch:       orch,
@@ -65,10 +71,18 @@ func NewServer(s *store.Store, bus *natsbus.Bus, orch *agent.Orchestrator, reg *
 		version:    version,
 		startedAt:  time.Now(),
 		sessions:   make(map[string]time.Time),
+
+		chatWaiters: newChatWaiters(),
 	}
+	if orch != nil && reg != nil && rtr != nil {
+		srv.chatBackend = serverChat{srv}
+		orch.OnOutput(srv.chatWaiters.deliver)
+	}
+	return srv
 }
 
 func (s *Server) Start(ctx context.Context) error {
+	s.baseCtx = ctx
 	go s.hub.Run(ctx)
 
 	// Subscribe to NATS events and broadcast to WebSocket
@@ -103,7 +117,16 @@ func (s *Server) Start(ctx context.Context) error {
 
 	handler := s.withMiddleware(mux)
 	addr := fmt.Sprintf(":%d", s.cfg.Port)
-	server := &http.Server{Addr: addr, Handler: handler}
+	server := &http.Server{
+		Addr:    addr,
+		Handler: handler,
+		// Bound how long a client may take to send headers or keep an idle
+		// connection, so unauthenticated clients can't hold connections open
+		// forever. No ReadTimeout/WriteTimeout: /api/chat and the WebSocket
+		// are legitimately long-lived.
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
 
 	go func() {
 		<-ctx.Done()
@@ -125,6 +148,12 @@ func (s *Server) withMiddleware(next http.Handler) http.Handler {
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 		if r.Method == "OPTIONS" {
 			w.WriteHeader(http.StatusOK)
+			return
+		}
+
+		// The chat token only ever grants POST /api/chat.
+		if r.URL.Path == "/api/chat" && s.validChatToken(r) {
+			next.ServeHTTP(w, r.WithContext(withChatToken(r.Context())))
 			return
 		}
 
@@ -166,7 +195,7 @@ func (s *Server) checkAuth(w http.ResponseWriter, r *http.Request) bool {
 	}
 
 	// Fall back to Basic Auth (for programmatic API access)
-	if _, pass, ok := r.BasicAuth(); ok && pass == s.cfg.Auth {
+	if _, pass, ok := r.BasicAuth(); ok && subtle.ConstantTimeCompare([]byte(pass), []byte(s.cfg.Auth)) == 1 {
 		return true
 	}
 

@@ -5,6 +5,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
+	"github.com/mtzanidakis/praktor/internal/agent"
 	"github.com/mymmrac/telego"
 )
 
@@ -307,5 +308,25 @@ func TestExtractAttachment(t *testing.T) {
 	got := extractAttachment(msg)
 	if got.FileID != "large" {
 		t.Errorf("expected largest photo (FileID=large), got %q", got.FileID)
+	}
+}
+
+func TestIsTelegramReply(t *testing.T) {
+	cases := []struct {
+		name string
+		meta map[string]string
+		want bool
+	}{
+		{"telegram message", map[string]string{"sender": "user:1", "chat_id": "1"}, true},
+		{"scheduled task", map[string]string{"sender": "scheduler"}, true},
+		{"no meta", nil, true},
+		{"chat api", map[string]string{"sender": "user:api", agent.MetaChannel: agent.ChannelAPI}, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := isTelegramReply(c.meta); got != c.want {
+				t.Errorf("isTelegramReply() = %v, want %v", got, c.want)
+			}
+		})
 	}
 }

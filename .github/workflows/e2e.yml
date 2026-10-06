@@ -1,0 +1,46 @@
+name: E2E
+
+# Hermetic end-to-end test without secrets: the gateway built from this tree,
+# real agent containers (Claude Code) and a mock Anthropic API
+# (test/e2e/mockllm). See test/e2e/run.sh for what it checks.
+#
+# Slow part: building the agent image (it pulls praktor-agent-base, about
+# 1 GB, and downloads Claude Code). The "break it" phase waits on a few
+# deliberate timeouts (about 1.5 min in total).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: End-to-end test
+        run: test/e2e/run.sh
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: e2e-logs
+          path: test/e2e/logs/
+          if-no-files-found: ignore
+
+      - name: Clean up
+        if: always()
+        run: |
+          docker rm -f praktor-e2e-gw praktor-e2e-mockllm praktor-e2e-sockproxy || true
+          docker ps -aq --filter label=praktor.managed=true | xargs -r docker rm -f
+          docker network rm praktor-e2e-gwnet praktor-net || true
+          docker volume ls -q | grep -E '^praktor-' | xargs -r docker volume rm || true

@@ -42,6 +42,9 @@ func (s *Server) registerAPI(mux *http.ServeMux) {
 	// Running agent containers
 	mux.HandleFunc("GET /api/agents", s.listRunningAgents)
 
+	// Chat: send a message to an agent and wait for the reply
+	mux.HandleFunc("POST /api/chat", s.chat)
+
 	// Tasks
 	mux.HandleFunc("GET /api/tasks", s.listTasks)
 	mux.HandleFunc("POST /api/tasks", s.createTask)

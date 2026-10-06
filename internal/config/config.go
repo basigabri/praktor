@@ -111,6 +111,12 @@ type WebConfig struct {
 	Enabled bool   `yaml:"enabled"`
 	Port    int    `yaml:"port"`
 	Auth    string `yaml:"auth"`
+	// ChatToken is a bearer token that only grants POST /api/chat, for
+	// clients such as Home Assistant that shouldn't hold the admin password.
+	ChatToken string `yaml:"chat_token"`
+	// ChatAgents limits which agents ChatToken may reach; the first is the
+	// default. Empty means any agent.
+	ChatAgents []string `yaml:"chat_agents"`
 }
 
 type SchedulerConfig struct {
@@ -226,6 +232,9 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("PRAKTOR_WEB_PASSWORD"); v != "" {
 		cfg.Web.Auth = v
+	}
+	if v := os.Getenv("PRAKTOR_CHAT_TOKEN"); v != "" {
+		cfg.Web.ChatToken = v
 	}
 	if v := os.Getenv("PRAKTOR_WEB_PORT"); v != "" {
 		if port, err := strconv.Atoi(v); err == nil {

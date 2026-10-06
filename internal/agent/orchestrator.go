@@ -413,7 +413,7 @@ func (o *Orchestrator) handleAgentOutput(msg *nats.Msg) {
 		// Get metadata: try msg_id first (parallel-safe), fall back to per-agent lastMeta
 		meta, deferred := o.popPending(output.MsgID)
 		if meta == nil {
-			meta = o.getLastMeta(agentID)
+			meta = fallbackReplyMeta(o.getLastMeta(agentID))
 		}
 
 		// Save to DB if there's content, a file was sent, or an abnormal termination
